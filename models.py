@@ -18,8 +18,6 @@ def norm(T):
     T_norm = row_abs / row_sum
     return T_norm
 
-
-
 class Matrix_optimize(nn.Module):
     def __init__(self, basis_num, num_classes):
         super(Matrix_optimize, self).__init__()
@@ -44,8 +42,8 @@ class Matrix_optimize(nn.Module):
             anchor_vector = self.basis_matrix[i](coefficient_matrix)
             results += anchor_vector
             self.basis_matrix[i].weight.data = norm(self.basis_matrix[i].weight.data)
+            
         return results
-        
 
 class LeNet(nn.Module):
     def __init__(self):
@@ -71,6 +69,4 @@ class LeNet(nn.Module):
             return out_1, out_2, correction
         else:
             return out_1, out_2
-
-
 

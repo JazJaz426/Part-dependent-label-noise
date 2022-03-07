@@ -74,8 +74,8 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
         self.linear = nn.Linear(512*block.expansion, num_classes)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.T_revision = nn.Linear(num_classes, num_classes, False)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1)) #output size 1x1
+        self.T_revision = nn.Linear(num_classes, num_classes, False) # no bias
         
            
     def _make_layer(self, block, planes, num_blocks, stride):
@@ -87,17 +87,17 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x, revision=True):
-        
         correction = self.T_revision.weight
-        
+        # x: 128x3x32x32
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)
         out = self.layer3(out)
-        out = self.layer4(out)
-        out = self.avgpool(out)
-        out_1 = out.view(out.size(0), -1)
-        out_2 = self.linear(out_1)
+        out = self.layer4(out) # 128x512x4x4
+        out = self.avgpool(out) # 128x512x1x1
+        out_1 = out.view(out.size(0), -1) # 128x512
+        print(f"out_1 shape:{out_1.shape}")
+        out_2 = self.linear(out_1) # 128x10
         if revision == True:
             return out_1, out_2, correction
         else:
@@ -129,7 +129,6 @@ class ResNet_F(nn.Module):
     def forward(self, x, revision=True):
 
         correction = self.T_revision.weight
-
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)

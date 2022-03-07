@@ -205,30 +205,31 @@ nowTime=datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 if os.path.exists(txtfile):
     os.system('mv %s %s' % (txtfile, txtfile+".bak-%s" % nowTime))
 
-
 def norm(T):
     row_sum = np.sum(T, 1)
     T_norm = T / row_sum
     return T_norm
 
-
+# matrix factorisation of V
 def train_m(V, r, k, e):
-
     m, n = np.shape(V)
-    W = np.mat(np.random.random((m, r)))
-    H = np.mat(np.random.random((r, n)))
+    W = np.mat(np.random.random((m, r))) # r个parts
+    H = np.mat(np.random.random((r, n))) # weight matrix
     data = []
     
+    # run for k iterations
     for x in range(k):
         V_pre = np.dot(W, H)
         E = V - V_pre
+        # when approximation error between data matrix and reconstructed matrix 
+        # is less than threshold, break
         err = 0.0
         err = np.sum(np.square(E))
         data.append(err)
         if err < e:  # threshold
             break
 
-        a = np.dot(W.T, V)  # Hkj
+        a = np.dot(W.T, V) # Hkj
         b = np.dot(np.dot(W.T, W), H)
 
         for i_1 in range(r):
@@ -243,11 +244,9 @@ def train_m(V, r, k, e):
                 if d[i_2, j_2] != 0:
                     W[i_2, j_2] = W[i_2, j_2] * c[i_2, j_2] / d[i_2, j_2]
 
-
-
         W = norm(W)
 
-
+    # return the best parts and weight matrix as well as the error array
     return W, H, data
 
 def accuracy(logit, target, topk=(1,)):
@@ -266,15 +265,13 @@ def accuracy(logit, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
-# Train the Model
-
+# Train the model
 def train(model, train_loader, epoch, optimizer, criterion):
     print('Training %s...' % model_str)
     
     train_total=0
     train_correct=0 
-   
-
+    
     for i, (data, labels) in enumerate(train_loader):
         data = data.cuda()
         labels = labels.cuda()
@@ -291,12 +288,13 @@ def train(model, train_loader, epoch, optimizer, criterion):
 
         if (i+1) % args.print_freq == 0:
             print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f' 
-                  %(epoch+1, args.n_epoch_1, i+1, len(train_dataset)//batch_size, prec1, loss.item()))
+                %(epoch+1, args.n_epoch_1, i+1, len(train_dataset)//batch_size, prec1, loss.item()))
         
-    train_acc=float(train_correct)/float(train_total)
-   
+    train_acc = float(train_correct)/float(train_total)
+    
     return train_acc
 
+# 
 def train_correction(model, train_loader, epoch, optimizer, W_group, basis_matrix_group, batch_size, num_classes, basis):
     print('Training %s...' % model_str)
     
@@ -310,24 +308,31 @@ def train_correction(model, train_loader, epoch, optimizer, W_group, basis_matri
         
         # Forward + Backward + Optimize
         optimizer.zero_grad()
-        _, logits=model(data, revision=False)
+        _, logits = model(data, revision=False) #128x10
         
-        logits_ = F.softmax(logits, dim=1)
-        logits_correction_total = torch.zeros(len(labels), num_classes)
-        for j in range(len(labels)):
+        logits_ = F.softmax(logits, dim=1) # 128x10
+        logits_correction_total = torch.zeros(len(labels), num_classes) #128x10
+        # for each x in the batch
+        for j in range(len(labels)): 
             idx = i * batch_size + j
+            # IDN 10x10
             matrix = matrix_combination(basis_matrix_group, W_group, idx, num_classes, basis)
             matrix = torch.from_numpy(matrix).float().cuda()
-            logits_single = logits_[j, :].unsqueeze(0)
-            logits_correction = logits_single.mm(matrix)
+            # x's clean posterior
+            logits_single = logits_[j, :].unsqueeze(0) #j-th row size 10 --> 1x10
+            # x's noisy posterior
+            logits_correction = logits_single.mm(matrix) #1x10x10x10 --> 1x10
+            # P(Y = true label y| X=x)
             pro1 = logits_single[:, labels[j]]
+            # P(Y~ = true label y| X=x)
             pro2 = logits_correction[:, labels[j]]
+            # distribution shift beta
             beta = Variable(pro1/pro2, requires_grad=True)
             logits_correction = torch.log(logits_correction+1e-12)
             logits_single = torch.log(logits_single + 1e-12)
             loss_ = beta * F.nll_loss(logits_single, labels[j].unsqueeze(0))
             loss += loss_
-            logits_correction_total[j, :] = logits_correction
+            logits_correction_total[j, :] = logits_correction # 128x1x10
         logits_correction_total = logits_correction_total.cuda()
         loss = loss / len(labels)
         prec1,  = accuracy(logits_correction_total, labels, topk=(1, ))
@@ -395,7 +400,6 @@ def val_correction(model, val_loader, epoch, W_group, basis_matrix_group, batch_
 
     return val_acc
 
-
 def train_revision(model, train_loader, epoch, optimizer, W_group, basis_matrix_group, batch_size, num_classes, basis):
     print('Training %s...' % model_str)
     
@@ -411,14 +415,13 @@ def train_revision(model, train_loader, epoch, optimizer, W_group, basis_matrix_
         optimizer.zero_grad()
         _, logits, revision = model(data, revision=True)
 
-        
         logits_ = F.softmax(logits, dim=1)
         logits_correction_total = torch.zeros(len(labels), num_classes)
         for j in range(len(labels)):
             idx = i * batch_size + j
             matrix = matrix_combination(basis_matrix_group, W_group, idx, num_classes, basis)
             matrix = torch.from_numpy(matrix).float().cuda()
-            matrix = tools.norm(matrix + revision)
+            matrix = tools.norm(matrix + revision) # train with the slack variable delta T
             
             logits_single = logits_[j, :].unsqueeze(0)
             logits_correction = logits_single.mm(matrix)
@@ -446,9 +449,7 @@ def train_revision(model, train_loader, epoch, optimizer, W_group, basis_matrix_
     train_acc=float(train_correct)/float(train_total)
     return train_acc
 
-
 def val_revision(model, train_loader, epoch, W_group, basis_matrix_group, batch_size, num_classes, basis):
-   
     val_total=0
     val_correct=0
 
@@ -458,7 +459,6 @@ def val_revision(model, train_loader, epoch, W_group, basis_matrix_group, batch_
         labels = labels.cuda()
         loss = 0.
         # Forward + Backward + Optimize
-     
         _, logits, revision = model(data, revision=True)
         
         logits_ = F.softmax(logits, dim=1)
@@ -489,11 +489,6 @@ def val_revision(model, train_loader, epoch, W_group, basis_matrix_group, batch_
    
     return val_acc
 
-
-
-
-
-
 # Evaluate the Model
 def evaluate(test_loader, model):
     print('Evaluating %s...' % model_str)
@@ -501,7 +496,6 @@ def evaluate(test_loader, model):
     correct1 = 0
     total1 = 0
     for data, labels in test_loader:
-        
         data = data.cuda()
         _, logits = model(data, revision=False)
         outputs = F.softmax(logits, dim=1)
@@ -514,61 +508,66 @@ def evaluate(test_loader, model):
     return acc
 
 
+# return a batch of feature representations c(x)
 def respresentations_extract(train_loader, model, num_sample, dim_respresentations, batch_size):
-
     model.eval()
-    A = torch.rand(num_sample, dim_respresentations)
+    A = torch.rand(num_sample, dim_respresentations) #num_sample x 512
     ind = int(num_sample / batch_size)
+
     with torch.no_grad():
         for i, (data, labels) in enumerate(train_loader):
             data = data.cuda()
-            logits, _ = model(data, revision=False)
+            # representation logits 128x512
+            logits, _ = model(data, revision=False) 
             if i < ind:
-                A[i*batch_size:(i+1)*batch_size, :] = logits
+                A[i*batch_size:(i+1)*batch_size, :] = logits # A.shape = batch_size x dim_representation (512)
             else:
-                A[ind*batch_size:, :] = logits
+                A[ind*batch_size:, :] = logits 
       
     return A.cpu().numpy()
 
-
+# return a batch of probability vectors 
 def probability_extract(train_loader, model, num_sample, num_classes, batch_size):
-
     model.eval()
     A = torch.rand(num_sample, num_classes)
     ind = int(num_sample / batch_size)
     with torch.no_grad():
+        # batch by batch fill in A
         for i, (data, labels) in enumerate(train_loader):
             data = data.cuda()
+            # class-size logits 128x10
             _ , logits = model(data, revision=False)
-            logits = F.softmax(logits, dim=1)
+            # probability vector 128x10
+            prob = F.softmax(logits, dim=1)
             if i < ind:
-                A[i*batch_size:(i+1)*batch_size, :] = logits
+                A[i*batch_size:(i+1)*batch_size, :] = prob
             else:
-                A[ind*batch_size:, :] = logits
+                A[ind*batch_size:, :] = prob
       
     return A.cpu().numpy()
 
-
-
+# 
 def estimate_matrix(logits_matrix, model_save_dir):
-    transition_matrix_group = np.empty((args.basis, args.num_classes, args.num_classes))
-    idx_matrix_group = np.empty((args.num_classes, args.basis))
+    transition_matrix_group = np.empty((args.basis, args.num_classes, args.num_classes)) #20x10x10 for cifar10
+    idx_matrix_group = np.empty((args.num_classes, args.basis)) #10x20
     a = np.linspace(97, 99, args.basis)
     a = list(a)
     for i in range(len(a)):
         percentage = a[i]
-        index = int(i)
-        logits_matrix_ = copy.deepcopy(logits_matrix)
-        transition_matrix, idx = tools.fit(logits_matrix_, args.num_classes, percentage, True)
-        transition_matrix = norm(transition_matrix)
+        index = int(i) # 0...19
+        logits_matrix_ = copy.deepcopy(logits_matrix) # num_samples x 10
+        transition_matrix, idx = tools.fit(logits_matrix_, args.num_classes, percentage, True) # use anchor points to estimate T
+        transition_matrix = norm(transition_matrix) # ensure probability matrix
         idx_matrix_group[:, index] = np.array(idx)
         transition_matrix_group[index] = transition_matrix
     idx_group_save_dir = model_save_dir + '/' + 'idx_group.npy'
     group_save_dir = model_save_dir + '/' + 'T_group.npy'
     np.save(idx_group_save_dir, idx_matrix_group) 
     np.save(group_save_dir, transition_matrix_group) 
+
     return idx_matrix_group, transition_matrix_group
 
+# return basisx10x10 
 def basis_matrix_optimize(model, optimizer, basis, num_classes, W_group, transition_matrix_group, idx_matrix_group, func, model_save_dir, epochs):
     basis_matrix_group = np.empty((basis, num_classes, num_classes))
     
@@ -592,10 +591,11 @@ def basis_matrix_optimize(model, optimizer, basis, num_classes, W_group, transit
 
         for x in range(basis):
             parameters = np.array(model.basis_matrix[x].weight.data)
-    
             basis_matrix_group[x, i, :] = parameters
+
     A_save_dir = model_save_dir + '/' + 'A.npy'
-    np.save(A_save_dir, basis_matrix_group)   
+    np.save(A_save_dir, basis_matrix_group)  
+
     return basis_matrix_group
     
 
@@ -604,7 +604,6 @@ def matrix_combination(basis_matrix_group, W_group, idx, num_classes, basis):
 
     M = np.zeros((num_classes, num_classes))
     for i in range(basis):
-        
         temp = float(coefficient[0, i]) * basis_matrix_group[i, :, :]
         M += temp
     for i in range(M.shape[0]):
@@ -614,12 +613,12 @@ def matrix_combination(basis_matrix_group, W_group, idx, num_classes, basis):
     return M
 
 
-
+# if cifar-10, noise_rate = 0.2
 def main():
     # Data Loader (Input Pipeline)
     print('loading dataset...')
     train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
-                                               batch_size=batch_size, 
+                                               batch_size=batch_size, #128
                                                num_workers=args.num_workers,
                                                drop_last=False,
                                                shuffle=False)
@@ -645,6 +644,7 @@ def main():
         clf1 = resnet.ResNet18_F(10)
     if args.dataset == 'cifar10':
         clf1 = resnet.ResNet34(10)
+        #clf1 = resnet.ResNet50(10)
     if args.dataset == 'svhn':
         clf1 = resnet.ResNet34(10)
 
@@ -664,10 +664,9 @@ def main():
     with open(txtfile, "a") as myfile:
         myfile.write(str(int(epoch)) + ' '  + str(train_acc)  + ' ' + str(val_acc) + ' ' + str(test_acc) + ' ' + "\n")
 
-
+    # train a classifier from noisy training data
     best_acc = 0.0
-    # training
-    for epoch in range(1, args.n_epoch_1):
+    for epoch in range(1, args.n_epoch_1): 
         # train models
         clf1.train()
         train_acc = train(clf1, train_loader, epoch, optimizer, nn.CrossEntropyLoss())
@@ -675,7 +674,6 @@ def main():
         val_acc = evaluate(val_loader, clf1)
         # evaluate models
         test_acc = evaluate(test_loader, clf1)
-
 
         # save results
         print('Epoch [%d/%d] Train Accuracy on the %s train data: Model %.4f %%' % (epoch+1, args.n_epoch_1, len(train_dataset), train_acc))
@@ -687,24 +685,34 @@ def main():
         if val_acc > best_acc:
             best_acc = val_acc
             torch.save(clf1.state_dict(), model_save_dir + '/'+ 'model.pth')
-            
+    
     print('Matrix Factorization is doing...')    
     clf1.load_state_dict(torch.load(model_save_dir + '/'+ 'model.pth'))
-    A = respresentations_extract(train_loader, clf1, len(train_dataset), args.dim, batch_size)
-    A_val = respresentations_extract(val_loader, clf1, len(val_dataset), args.dim, batch_size)
-    A_total = np.append(A, A_val, axis=0)
-    W_total, H_total ,error= train_m(A_total, args.basis, args.iteration_nmf, 1e-5)
+
+    # extract the feature representation from the trained model
+    A = respresentations_extract(train_loader, clf1, len(train_dataset), args.dim, batch_size)# 128 x 512
+    A_val = respresentations_extract(val_loader, clf1, len(val_dataset), args.dim, batch_size)# 128 x 512
+    A_total = np.append(A, A_val, axis=0) # 256 x 512
+
+    # matrix factorisation of the data matrix (feature representations) 
+    W_total, H_total, error = train_m(A_total, args.basis, args.iteration_nmf, 1e-5) # V, r, k, e
     for i in range(W_total.shape[0]):
         for j in range(W_total.shape[1]):
             if W_total[i,j]<1e-6:
                 W_total[i,j] = 0.
+    # split the parts 
     W = W_total[0:len(train_dataset), :]
     W_val = W_total[len(train_dataset):, :]
-    print('Transition Matrix is estimating...Wating...')
+
+    # estimate IDN transition matrix using part-dependent matrix
+    print('Transition Matrix is estimating...Waiting...')
+    # num_samples x 10: probability matrix
     logits_matrix = probability_extract(train_loader, clf1, len(train_dataset), args.num_classes, batch_size)
     idx_matrix_group, transition_matrix_group = estimate_matrix(logits_matrix, model_save_dir)
+
     logits_matrix_val = probability_extract(val_loader, clf1, len(val_dataset), args.num_classes, batch_size)
     idx_matrix_group_val, transition_matrix_group_val = estimate_matrix(logits_matrix_val, model_save_dir)
+
     func = nn.MSELoss()
 
     model = Matrix_optimize(args.basis, args.num_classes)
@@ -723,7 +731,7 @@ def main():
 
     optimizer_ = torch.optim.SGD(clf1.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=args.momentum)
 
-
+    # loss correction
     best_acc = 0.0
     for epoch in range(1, args.n_epoch_2):
         # train model
@@ -744,7 +752,8 @@ def main():
         print('Epoch [%d/%d] Train Accuracy on the %s train data: Model %.4f %%' % (epoch+1, args.n_epoch_2, len(train_dataset), train_acc))
         print('Epoch [%d/%d] Val Accuracy on the %s val data: Model %.4f %% ' % (epoch+1, args.n_epoch_2, len(val_dataset), val_acc))
         print('Epoch [%d/%d] Test Accuracy on the %s test data: Model %.4f %% ' % (epoch+1, args.n_epoch_2, len(test_dataset), test_acc))
-            
+
+    #         
     clf1.load_state_dict(torch.load(model_save_dir + '/'+ 'model.pth'))
     optimizer_r = torch.optim.Adam(clf1.parameters(), lr=args.lr_revision, weight_decay=args.weight_decay)
     nn.init.constant_(clf1.T_revision.weight, 0.0)

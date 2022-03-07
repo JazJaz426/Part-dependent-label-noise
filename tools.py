@@ -67,18 +67,18 @@ def norm(T):
     return T_norm
 
 
-
+# for every class find an ~/anchor point to estimate T
 def fit(X, num_classes, percentage, filter_outlier=False):
     # number of classes
     c = num_classes
     T = np.empty((c, c)) # +1 -> index 
-    eta_corr = X
+    eta_corr = X # transition vector num_samples x 10
     ind = []
-    for i in np.arange(c):
+    for i in np.arange(c): #0...c-1
         if not filter_outlier:
-            idx_best = np.argmax(eta_corr[:, i])
+            idx_best = np.argmax(eta_corr[:, i]) # find anchor points
         else:
-            eta_thresh = np.percentile(eta_corr[:, i], percentage,interpolation='higher')
+            eta_thresh = np.percentile(eta_corr[:, i], percentage, interpolation='higher')
             robust_eta = eta_corr[:, i]
             robust_eta[robust_eta >= eta_thresh] = 0.0
             idx_best = np.argmax(robust_eta)
